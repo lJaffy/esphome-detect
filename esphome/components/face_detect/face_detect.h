@@ -12,6 +12,12 @@
 
 #include "esphome/components/esp32_camera/esp32_camera.h"
 
+#if __has_include("dl_image_define.hpp")
+#include "dl_image_define.hpp"
+#else
+#include "dl_image.hpp"
+#endif
+
 namespace esphome::face_detect {
 
 struct FaceBox {
@@ -50,6 +56,7 @@ class FaceDetect : public Component, public camera::CameraListener {
 
  protected:
   bool run_inference_(const std::shared_ptr<camera::CameraImage> &image);
+  bool detect_and_publish_(dl::image::img_t &img);
   void publish_no_face_();
   void publish_face_(const FaceBox &box, int count);
 

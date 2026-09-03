@@ -13,6 +13,9 @@
 #else
 #include "dl_image.hpp"
 #endif
+#include "img_converters.h"
+
+#include <vector>
 
 namespace esphome::face_detect {
 
@@ -71,16 +74,34 @@ bool FaceDetect::run_inference_(const std::shared_ptr<camera::CameraImage> &imag
   if (fb == nullptr || fb->buf == nullptr) {
     return false;
   }
-  if (fb->format != PIXFORMAT_RGB565) {
+  if (fb->format == PIXFORMAT_RGB565) {
+    // Zero-copy fast path (preferred: set pixel_format: RGB565 in YAML;
+    // ESPHome still streams JPEG via frame2jpg conversion).
+    dl::image::img_t img{fb->buf, static_cast<uint16_t>(fb->width),
+                         static_cast<uint16_t>(fb->height), dl::image::DL_IMAGE_PIX_TYPE_RGB565LE};
+    return this->detect_and_publish_(img);
+  }
+  // Generic fallback: JPEG (format 4) and other non-RGB565 captures are
+  // converted to RGB888 via esp32-camera's fmt2rgb888 (documented for face
+  // detection). Buffer is ~w*h*3 bytes, freed on return.
+  if (fb->width == 0 || fb->height == 0 || fb->width > 1024 || fb->height > 1024) {
+    ESP_LOGW(TAG, "Unsupported frame size %dx%d, skipping", fb->width, fb->height);
+    return false;
+  }
+  std::vector<uint8_t> rgb888(static_cast<size_t>(fb->width) * fb->height * 3);
+  if (!fmt2rgb888(fb->buf, fb->len, fb->format, rgb888.data())) {
     if (!this->warned_format_) {
-      ESP_LOGW(TAG, "Face detection needs pixel_format RGB565, got %d, skipping", fb->format);
+      ESP_LOGW(TAG, "Failed to convert pixel_format %d to RGB888, skipping", fb->format);
       this->warned_format_ = true;
     }
     return false;
   }
-  // Verify endianness (LE vs BE) against live frames during bring-up.
-  dl::image::img_t img{fb->buf, static_cast<uint16_t>(fb->width),
-                       static_cast<uint16_t>(fb->height), dl::image::DL_IMAGE_PIX_TYPE_RGB565LE};
+  dl::image::img_t img{rgb888.data(), static_cast<uint16_t>(fb->width),
+                       static_cast<uint16_t>(fb->height), dl::image::DL_IMAGE_PIX_TYPE_RGB888};
+  return this->detect_and_publish_(img);
+}
+
+bool FaceDetect::detect_and_publish_(dl::image::img_t &img) {
   auto *detector = static_cast<HumanFaceDetect *>(this->detector_);
   auto &results = detector->run(img);
 
