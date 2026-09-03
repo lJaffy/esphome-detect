@@ -63,7 +63,6 @@ void FaceDetect::loop() {
 }
 
 bool FaceDetect::run_inference_(const std::shared_ptr<camera::CameraImage> &image) {
-#ifdef USE_ESP32_CAMERA
   auto esp_image = std::static_pointer_cast<esp32_camera::ESP32CameraImage>(image);
   if (esp_image == nullptr) {
     return false;
@@ -111,10 +110,6 @@ bool FaceDetect::run_inference_(const std::shared_ptr<camera::CameraImage> &imag
     this->publish_face_(best, count);
   }
   return true;
-#else
-  ESP_LOGE(TAG, "USE_ESP32_CAMERA not enabled");
-  return false;
-#endif
 }
 
 void FaceDetect::publish_no_face_() {

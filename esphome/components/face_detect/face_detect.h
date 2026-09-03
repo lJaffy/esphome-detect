@@ -10,9 +10,7 @@
 #include "esphome/components/camera/camera.h"
 #include "esphome/components/sensor/sensor.h"
 
-#ifdef USE_ESP32_CAMERA
 #include "esphome/components/esp32_camera/esp32_camera.h"
-#endif
 
 namespace esphome::face_detect {
 
