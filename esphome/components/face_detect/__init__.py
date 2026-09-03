@@ -7,7 +7,7 @@ import esphome.config_validation as cv
 from esphome.const import CONF_ID, CONF_TRIGGER_ID, CONF_THROTTLE
 from esphome.types import ConfigType
 
-AUTO_LOAD = ["binary_sensor", "sensor"]
+AUTO_LOAD = ["binary_sensor", "sensor", "text_sensor"]
 DEPENDENCIES = ["esp32_camera"]
 MULTI_CONF = True
 

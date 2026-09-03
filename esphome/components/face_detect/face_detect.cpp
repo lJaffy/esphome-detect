@@ -41,6 +41,9 @@ void FaceDetect::setup() {
     this->mark_failed();
   } else {
     ESP_LOGI(TAG, "HumanFaceDetect model created (yaml model: %s)", this->model_name_.c_str());
+    if (this->model_text_sensor_ != nullptr) {
+      this->model_text_sensor_->publish_state(this->model_name_);
+    }
   }
 }
 
@@ -236,6 +239,7 @@ void FaceDetect::dump_config() {
   LOG_SENSOR("  ", "Box H", this->box_h_);
   LOG_SENSOR("  ", "Score", this->score_);
   LOG_SENSOR("  ", "Count", this->count_);
+  LOG_TEXT_SENSOR("  ", "Model", this->model_text_sensor_);
 }
 
 }  // namespace esphome::face_detect

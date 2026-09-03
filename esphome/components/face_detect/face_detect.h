@@ -12,6 +12,7 @@
 #include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/camera/camera.h"
 #include "esphome/components/sensor/sensor.h"
+#include "esphome/components/text_sensor/text_sensor.h"
 
 #include "esphome/components/esp32_camera/esp32_camera.h"
 
@@ -52,6 +53,7 @@ class FaceDetect : public Component, public camera::CameraListener {
   void set_box_h_sensor(sensor::Sensor *s) { this->box_h_ = s; }
   void set_score_sensor(sensor::Sensor *s) { this->score_ = s; }
   void set_count_sensor(sensor::Sensor *s) { this->count_ = s; }
+  void set_model_text_sensor(text_sensor::TextSensor *s) { this->model_text_sensor_ = s; }
 
   void on_camera_image(const std::shared_ptr<camera::CameraImage> &image) override;
 
@@ -81,6 +83,7 @@ class FaceDetect : public Component, public camera::CameraListener {
   sensor::Sensor *box_h_{nullptr};
   sensor::Sensor *score_{nullptr};
   sensor::Sensor *count_{nullptr};
+  text_sensor::TextSensor *model_text_sensor_{nullptr};
 
   CallbackManager<void(float, float, float, float, float, int)> face_callback_;
 
