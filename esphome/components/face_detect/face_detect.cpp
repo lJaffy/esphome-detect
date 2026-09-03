@@ -15,11 +15,14 @@
 #endif
 #include "img_converters.h"
 
-#include <vector>
+#include "esp_heap_caps.h"
 
 namespace esphome::face_detect {
 
 static const char *const TAG = "face_detect";
+
+// Max sensor frame accepted for conversion (640x480 RGB888 ~= 900KB PSRAM).
+static constexpr uint16_t FACE_DETECT_MAX_DIM = 640;
 
 void FaceDetect::setup() {
   if (this->camera_ == nullptr) {
@@ -29,15 +32,56 @@ void FaceDetect::setup() {
   }
   this->camera_->add_listener(this);
   // Created late to avoid early heap fragmentation, mirroring esp-who examples.
-  // No-arg constructor uses Kconfig DEFAULT_HUMAN_FACE_DETECT_MODEL internally.
+  // No-arg constructor uses Kconfig DEFAULT_HUMAN_FACE_DETECT_MODEL internally,
+  // selected via the `model:` YAML option (msrmnp/espdet_224/espdet_416).
   this->detector_ = new HumanFaceDetect();
   this->model_ready_ = this->detector_ != nullptr;
   if (!this->model_ready_) {
     ESP_LOGE(TAG, "Failed to create HumanFaceDetect model");
     this->mark_failed();
   } else {
-    ESP_LOGI(TAG, "HumanFaceDetect model created");
+    ESP_LOGI(TAG, "HumanFaceDetect model created (yaml model: %s)", this->model_name_.c_str());
   }
+}
+
+FaceDetect::~FaceDetect() {
+  if (this->conv_buf_ != nullptr) {
+    heap_caps_free(this->conv_buf_);
+    this->conv_buf_ = nullptr;
+    this->conv_buf_size_ = 0;
+  }
+}
+
+bool FaceDetect::ensure_conv_buf_(size_t size) {
+  if (size == 0) {
+    return false;
+  }
+  if (this->conv_buf_ != nullptr && this->conv_buf_size_ >= size) {
+    return true;
+  }
+  if (this->conv_buf_ != nullptr) {
+    heap_caps_free(this->conv_buf_);
+    this->conv_buf_ = nullptr;
+    this->conv_buf_size_ = 0;
+  }
+  // PSRAM first (8MB boards hold 640x480 RGB888 ~= 900KB); DRAM fallback for
+  // tiny frames. Never throws: null is checked by the caller.
+  uint8_t *buf = static_cast<uint8_t *>(
+      heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  if (buf == nullptr) {
+    buf = static_cast<uint8_t *>(heap_caps_malloc(size, MALLOC_CAP_DEFAULT | MALLOC_CAP_8BIT));
+  }
+  if (buf == nullptr) {
+    if (!this->warned_alloc_) {
+      ESP_LOGW(TAG, "Conversion buffer alloc failed (%u bytes), skipping frame",
+               static_cast<unsigned>(size));
+      this->warned_alloc_ = true;
+    }
+    return false;
+  }
+  this->conv_buf_ = buf;
+  this->conv_buf_size_ = size;
+  return true;
 }
 
 void FaceDetect::on_camera_image(const std::shared_ptr<camera::CameraImage> &image) {
@@ -83,27 +127,38 @@ bool FaceDetect::run_inference_(const std::shared_ptr<camera::CameraImage> &imag
   }
   // Generic fallback: JPEG (format 4) and other non-RGB565 captures are
   // converted to RGB888 via esp32-camera's fmt2rgb888 (documented for face
-  // detection). Buffer is ~w*h*3 bytes, freed on return.
-  if (fb->width == 0 || fb->height == 0 || fb->width > 1024 || fb->height > 1024) {
+  // detection) into a reusable PSRAM buffer.
+  if (fb->width == 0 || fb->height == 0 || fb->width > FACE_DETECT_MAX_DIM ||
+      fb->height > FACE_DETECT_MAX_DIM) {
     ESP_LOGW(TAG, "Unsupported frame size %dx%d, skipping", fb->width, fb->height);
     return false;
   }
-  std::vector<uint8_t> rgb888(static_cast<size_t>(fb->width) * fb->height * 3);
-  if (!fmt2rgb888(fb->buf, fb->len, fb->format, rgb888.data())) {
+  const size_t need = static_cast<size_t>(fb->width) * fb->height * 3;
+  if (!this->ensure_conv_buf_(need)) {
+    return false;
+  }
+  const uint32_t t0 = millis();
+  if (!fmt2rgb888(fb->buf, fb->len, fb->format, this->conv_buf_)) {
     if (!this->warned_format_) {
       ESP_LOGW(TAG, "Failed to convert pixel_format %d to RGB888, skipping", fb->format);
       this->warned_format_ = true;
     }
     return false;
   }
-  dl::image::img_t img{rgb888.data(), static_cast<uint16_t>(fb->width),
+  dl::image::img_t img{this->conv_buf_, static_cast<uint16_t>(fb->width),
                        static_cast<uint16_t>(fb->height), dl::image::DL_IMAGE_PIX_TYPE_RGB888};
-  return this->detect_and_publish_(img);
+  const bool ok = this->detect_and_publish_(img);
+  ESP_LOGV(TAG, "Converted %dx%d fmt %d in %" PRIu32 "ms", fb->width, fb->height, fb->format,
+           millis() - t0);
+  return ok;
 }
 
 bool FaceDetect::detect_and_publish_(dl::image::img_t &img) {
   auto *detector = static_cast<HumanFaceDetect *>(this->detector_);
+  const uint32_t t0 = millis();
   auto &results = detector->run(img);
+  ESP_LOGV(TAG, "Inference (%s) on %dx%d in %" PRIu32 "ms", this->model_name_.c_str(), img.width,
+           img.height, millis() - t0);
 
   FaceBox best;
   int count = 0;
@@ -169,6 +224,7 @@ void FaceDetect::publish_face_(const FaceBox &box, int count) {
 
 void FaceDetect::dump_config() {
   ESP_LOGCONFIG(TAG, "Face detection:");
+  ESP_LOGCONFIG(TAG, "  Model: %s", this->model_name_.c_str());
   ESP_LOGCONFIG(TAG, "  Confidence threshold: %.2f", this->confidence_threshold_);
   ESP_LOGCONFIG(TAG, "  Throttle: %" PRIu32 "ms", this->throttle_ms_);
   ESP_LOGCONFIG(TAG, "  Max boxes: %u", this->max_boxes_);

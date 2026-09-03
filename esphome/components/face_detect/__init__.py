@@ -22,6 +22,30 @@ CONF_CAMERA_ID = "camera_id"
 CONF_CONFIDENCE_THRESHOLD = "confidence_threshold"
 CONF_ON_FACE = "on_face"
 CONF_MAX_BOXES = "max_boxes"
+CONF_MODEL = "model"
+
+MODEL_MSRMNP = "msrmnp"
+MODEL_ESPDET_224 = "espdet_224"
+MODEL_ESPDET_416 = "espdet_416"
+
+# Kconfig choice symbols in espressif/human_face_detect (see its Kconfig).
+# The FLASH_* symbol must be enabled alongside the model choice, otherwise the
+# choice dependency (MODEL_IN_SDCARD || FLASH_<MODEL>) is unsatisfied and the
+# default silently stays on MSRMNP.
+MODEL_SDKCONFIG = {
+    MODEL_MSRMNP: (
+        "HUMAN_FACE_DETECT_MSRMNP_S8_V1",
+        "FLASH_HUMAN_FACE_DETECT_MSRMNP_S8_V1",
+    ),
+    MODEL_ESPDET_224: (
+        "ESPDET_PICO_224_224_FACE",
+        "FLASH_ESPDET_PICO_224_224_FACE",
+    ),
+    MODEL_ESPDET_416: (
+        "ESPDET_PICO_416_416_FACE",
+        "FLASH_ESPDET_PICO_416_416_FACE",
+    ),
+}
 
 CONFIG_SCHEMA = cv.All(
     cv.Schema(
@@ -35,6 +59,13 @@ CONFIG_SCHEMA = cv.All(
                 CONF_THROTTLE, default="500ms"
             ): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_MAX_BOXES, default=1): cv.int_range(min=1, max=8),
+            cv.Optional(CONF_MODEL, default=MODEL_MSRMNP): cv.enum(
+                {
+                    MODEL_MSRMNP: MODEL_MSRMNP,
+                    MODEL_ESPDET_224: MODEL_ESPDET_224,
+                    MODEL_ESPDET_416: MODEL_ESPDET_416,
+                }
+            ),
             cv.Optional(CONF_ON_FACE): automation.validate_automation(
                 {
                     cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(FaceDetectedTrigger),
@@ -58,6 +89,11 @@ async def to_code(config: ConfigType) -> None:
     cg.add(var.set_confidence_threshold(config[CONF_CONFIDENCE_THRESHOLD]))
     cg.add(var.set_throttle(config[CONF_THROTTLE]))
     cg.add(var.set_max_boxes(config[CONF_MAX_BOXES]))
+    cg.add(var.set_model_name(config[CONF_MODEL]))
+
+    model = config[CONF_MODEL]
+    for symbol in MODEL_SDKCONFIG[model]:
+        esp32.add_idf_sdkconfig_option(symbol, True)
 
     # Proven set from esp-who object_detect lockfile (IDF 5.5.5): esp-dl 3.3.8
     # satisfies human_face_detect 0.5.0's esp-dl ~3.3.0 requirement.
