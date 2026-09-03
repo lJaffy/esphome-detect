@@ -33,7 +33,7 @@ struct FaceBox {
 
 class FaceDetect : public Component, public camera::CameraListener {
  public:
-  ~FaceDetect() override;
+  ~FaceDetect();
   void setup() override;
   void loop() override;
   void dump_config() override;
