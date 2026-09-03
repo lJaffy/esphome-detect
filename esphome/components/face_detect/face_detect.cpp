@@ -1,0 +1,173 @@
+#ifdef USE_ESP32
+
+#include "face_detect.h"
+#include "esphome/core/application.h"
+#include "esphome/core/log.h"
+
+#if __has_include("human_face_detect.hpp")
+#include "human_face_detect.hpp"
+#include "dl_image.hpp"
+static constexpr uint8_t FACE_DETECT_HAS_MODEL = 1
+#endif
+
+namespace esphome::face_detect {
+
+static const char *const TAG = "face_detect";
+
+void FaceDetect::setup() {
+  if (this->camera_ == nullptr) {
+    ESP_LOGE(TAG, "No camera configured, check camera_id");
+    this->mark_failed();
+    return;
+  }
+  this->camera_->add_listener(this);
+#ifdef FACE_DETECT_HAS_MODEL
+  // Created late to avoid early heap fragmentation, mirroring esp-who examples.
+  this->detector_ = new HumanFaceDetect(
+      static_cast<HumanFaceDetect::model_type_t>(CONFIG_DEFAULT_HUMAN_FACE_DETECT_MODEL), false);
+  this->model_ready_ = this->detector_ != nullptr;
+  if (!this->model_ready_) {
+    ESP_LOGE(TAG, "Failed to create HumanFaceDetect model");
+    this->mark_failed();
+  }
+#else
+  ESP_LOGE(TAG, "human_face_detect.hpp not available, check IDF components");
+  this->mark_failed();
+#endif
+}
+
+void FaceDetect::on_camera_image(const std::shared_ptr<camera::CameraImage> &image) {
+  if (!this->model_ready_) {
+    return;
+  }
+  const uint32_t now = millis();
+  if (now - this->last_run_ < this->throttle_ms_) {
+    return;
+  }
+  this->pending_image_ = image;
+}
+
+void FaceDetect::loop() {
+  if (!this->model_ready_ || this->pending_image_ == nullptr) {
+    return;
+  }
+  const uint32_t now = App.get_loop_component_start_time();
+  if (now - this->last_run_ < this->throttle_ms_) {
+    return;
+  }
+  this->last_run_ = now;
+  auto image = this->pending_image_;
+  this->pending_image_.reset();
+  this->run_inference_(image);
+}
+
+bool FaceDetect::run_inference_(const std::shared_ptr<camera::CameraImage> &image) {
+#ifdef FACE_DETECT_HAS_MODEL
+#ifdef USE_ESP32_CAMERA
+  auto esp_image = std::static_pointer_cast<esp32_camera::ESP32CameraImage>(image);
+  if (esp_image == nullptr) {
+    return false;
+  }
+  camera_fb_t *fb = esp_image->get_raw_buffer();
+  if (fb == nullptr || fb->buf == nullptr) {
+    return false;
+  }
+  if (fb->format != PIXFORMAT_RGB565) {
+    if (!this->warned_format_) {
+      ESP_LOGW(TAG, "Face detection needs pixel_format RGB565, got %d, skipping", fb->format);
+      this->warned_format_ = true;
+    }
+    return false;
+  }
+  // Verify endianness (LE vs BE) against live frames during bring-up.
+  dl::image::img_t img{fb->buf, static_cast<uint16_t>(fb->width),
+                       static_cast<uint16_t>(fb->height), dl::image::DL_IMAGE_PIX_TYPE_RGB565LE};
+  auto *detector = static_cast<HumanFaceDetect *>(this->detector_);
+  auto &results = detector->run(img);
+
+  FaceBox best;
+  int count = 0;
+  for (auto &r : results) {
+    if (r.score < this->confidence_threshold_) {
+      continue;
+    }
+    count++;
+    float area = (r.box[2] - r.box[0]) * (r.box[3] - r.box[1]);
+    float best_area = best.w * best.h;
+    if (area > best_area) {
+      best.x = r.box[0];
+      best.y = r.box[1];
+      best.w = r.box[2] - r.box[0];
+      best.h = r.box[3] - r.box[1];
+      best.score = r.score;
+    }
+    if (count >= this->max_boxes_) {
+      break;
+    }
+  }
+  if (count == 0) {
+    this->publish_no_face_();
+  } else {
+    this->publish_face_(best, count);
+  }
+  return true;
+#else
+  ESP_LOGE(TAG, "USE_ESP32_CAMERA not enabled");
+  return false;
+#endif
+#else
+  return false;
+#endif
+}
+
+void FaceDetect::publish_no_face_() {
+  if (this->presence_ != nullptr) {
+    this->presence_->publish_state(false);
+  }
+  if (this->count_ != nullptr) {
+    this->count_->publish_state(0);
+  }
+}
+
+void FaceDetect::publish_face_(const FaceBox &box, int count) {
+  if (this->presence_ != nullptr) {
+    this->presence_->publish_state(true);
+  }
+  if (this->box_x_ != nullptr) {
+    this->box_x_->publish_state(box.x);
+  }
+  if (this->box_y_ != nullptr) {
+    this->box_y_->publish_state(box.y);
+  }
+  if (this->box_w_ != nullptr) {
+    this->box_w_->publish_state(box.w);
+  }
+  if (this->box_h_ != nullptr) {
+    this->box_h_->publish_state(box.h);
+  }
+  if (this->score_ != nullptr) {
+    this->score_->publish_state(box.score);
+  }
+  if (this->count_ != nullptr) {
+    this->count_->publish_state(count);
+  }
+  this->face_callback_.call(box.x, box.y, box.w, box.h, box.score, count);
+}
+
+void FaceDetect::dump_config() {
+  ESP_LOGCONFIG(TAG, "Face detection:");
+  ESP_LOGCONFIG(TAG, "  Confidence threshold: %.2f", this->confidence_threshold_);
+  ESP_LOGCONFIG(TAG, "  Throttle: %" PRIu32 "ms", this->throttle_ms_);
+  ESP_LOGCONFIG(TAG, "  Max boxes: %u", this->max_boxes_);
+  LOG_BINARY_SENSOR("  ", "Presence", this->presence_);
+  LOG_SENSOR("  ", "Box X", this->box_x_);
+  LOG_SENSOR("  ", "Box Y", this->box_y_);
+  LOG_SENSOR("  ", "Box W", this->box_w_);
+  LOG_SENSOR("  ", "Box H", this->box_h_);
+  LOG_SENSOR("  ", "Score", this->score_);
+  LOG_SENSOR("  ", "Count", this->count_);
+}
+
+}  // namespace esphome::face_detect
+
+#endif
