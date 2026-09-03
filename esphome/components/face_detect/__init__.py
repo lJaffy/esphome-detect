@@ -59,6 +59,11 @@ async def to_code(config: ConfigType) -> None:
     cg.add(var.set_throttle(config[CONF_THROTTLE]))
     cg.add(var.set_max_boxes(config[CONF_MAX_BOXES]))
 
+    # Proven set from esp-who object_detect lockfile (IDF 5.5.5): esp-dl 3.3.8
+    # satisfies human_face_detect 0.5.0's esp-dl ~3.3.0 requirement.
+    # After changing these, run 'esphome clean' so src/idf_component.yml
+    # and dependencies.lock are regenerated; otherwise the new headers
+    # never reach the compiler (previously masked as runtime mark_failed).
     esp32.add_idf_component(name="espressif/esp-dl", ref="3.3.8")
     esp32.add_idf_component(name="espressif/human_face_detect", ref="0.5.0")
 

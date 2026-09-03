@@ -4,10 +4,14 @@
 #include "esphome/core/application.h"
 #include "esphome/core/log.h"
 
-#if __has_include("human_face_detect.hpp")
+#if !__has_include("human_face_detect.hpp")
+#error "human_face_detect.hpp not found - IDF managed components missing. Check src/idf_component.yml contains espressif/human_face_detect, run 'esphome clean', then rebuild with registry access."
+#endif
 #include "human_face_detect.hpp"
+#if __has_include("dl_image_define.hpp")
+#include "dl_image_define.hpp"
+#else
 #include "dl_image.hpp"
-static constexpr uint8_t FACE_DETECT_HAS_MODEL = 1;
 #endif
 
 namespace esphome::face_detect {
@@ -21,19 +25,16 @@ void FaceDetect::setup() {
     return;
   }
   this->camera_->add_listener(this);
-#ifdef FACE_DETECT_HAS_MODEL
   // Created late to avoid early heap fragmentation, mirroring esp-who examples.
-  this->detector_ = new HumanFaceDetect(
-      static_cast<HumanFaceDetect::model_type_t>(CONFIG_DEFAULT_HUMAN_FACE_DETECT_MODEL), false);
+  // No-arg constructor uses Kconfig DEFAULT_HUMAN_FACE_DETECT_MODEL internally.
+  this->detector_ = new HumanFaceDetect();
   this->model_ready_ = this->detector_ != nullptr;
   if (!this->model_ready_) {
     ESP_LOGE(TAG, "Failed to create HumanFaceDetect model");
     this->mark_failed();
+  } else {
+    ESP_LOGI(TAG, "HumanFaceDetect model created");
   }
-#else
-  ESP_LOGE(TAG, "human_face_detect.hpp not available, check IDF components");
-  this->mark_failed();
-#endif
 }
 
 void FaceDetect::on_camera_image(const std::shared_ptr<camera::CameraImage> &image) {
@@ -62,7 +63,6 @@ void FaceDetect::loop() {
 }
 
 bool FaceDetect::run_inference_(const std::shared_ptr<camera::CameraImage> &image) {
-#ifdef FACE_DETECT_HAS_MODEL
 #ifdef USE_ESP32_CAMERA
   auto esp_image = std::static_pointer_cast<esp32_camera::ESP32CameraImage>(image);
   if (esp_image == nullptr) {
@@ -113,9 +113,6 @@ bool FaceDetect::run_inference_(const std::shared_ptr<camera::CameraImage> &imag
   return true;
 #else
   ESP_LOGE(TAG, "USE_ESP32_CAMERA not enabled");
-  return false;
-#endif
-#else
   return false;
 #endif
 }
