@@ -119,10 +119,11 @@ bool FaceDetect::run_inference_(const std::shared_ptr<camera::CameraImage> &imag
     return false;
   }
   if (fb->format == PIXFORMAT_RGB565) {
-    // Zero-copy fast path (preferred: set pixel_format: RGB565 in YAML;
-    // ESPHome still streams JPEG via frame2jpg conversion).
+    // Zero-copy fast path. The sensor/driver emits big-endian RGB565
+    // (MSB first, per esp32-camera img_converters docs); tagging it LE
+    // byte-swaps the input and the model silently finds nothing.
     dl::image::img_t img{fb->buf, static_cast<uint16_t>(fb->width),
-                         static_cast<uint16_t>(fb->height), dl::image::DL_IMAGE_PIX_TYPE_RGB565LE};
+                         static_cast<uint16_t>(fb->height), dl::image::DL_IMAGE_PIX_TYPE_RGB565BE};
     return this->detect_and_publish_(img);
   }
   // Generic fallback: JPEG (format 4) and other non-RGB565 captures are
