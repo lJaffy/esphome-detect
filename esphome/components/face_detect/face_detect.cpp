@@ -178,8 +178,16 @@ bool FaceDetect::detect_and_publish_(dl::image::img_t &img) {
            img.height, millis() - t0);
 
   FaceBox best;
+  float best_score = 0.0f;
+  bool has_any = false;
   int count = 0;
   for (auto &r : results) {
+    // Strongest signal overall, published every frame even below threshold
+    // so the score sensor shows update rate + calibration baseline.
+    if (!has_any || r.score > best_score) {
+      best_score = r.score;
+      has_any = true;
+    }
     if (r.score < this->confidence_threshold_) {
       continue;
     }
@@ -196,6 +204,11 @@ bool FaceDetect::detect_and_publish_(dl::image::img_t &img) {
     if (count >= this->max_boxes_) {
       break;
     }
+  }
+  // Score always reflects the latest frame: max candidate score, or 0 when
+  // the model found nothing (distinguishes clean negative from stall).
+  if (this->score_ != nullptr) {
+    this->score_->publish_state(has_any ? best_score : 0.0f);
   }
   if (count == 0) {
     this->publish_no_face_();
@@ -230,9 +243,8 @@ void FaceDetect::publish_face_(const FaceBox &box, int count) {
   if (this->box_h_ != nullptr) {
     this->box_h_->publish_state(box.h);
   }
-  if (this->score_ != nullptr) {
-    this->score_->publish_state(box.score);
-  }
+  // Score is published unconditionally in detect_and_publish_ (strongest
+  // signal every frame, even below threshold), so it is not repeated here.
   if (this->count_ != nullptr) {
     this->count_->publish_state(count);
   }
