@@ -17,6 +17,8 @@
 
 #include "esp_heap_caps.h"
 
+#include <cstring>
+
 namespace esphome::face_detect {
 
 static const char *const TAG = "face_detect";
@@ -109,10 +111,14 @@ void FaceDetect::loop() {
   this->last_run_ = now;
   auto image = this->pending_image_;
   this->pending_image_.reset();
-  this->run_inference_(image);
+  // Moved in so inference can release the driver fb before the slow model
+  // runs (keeps fb_count: 2 pool + API streaming flowing).
+  this->run_inference_(std::move(image));
 }
 
-bool FaceDetect::run_inference_(const std::shared_ptr<camera::CameraImage> &image) {
+// Takes ownership: the driver fb is returned to the pool before inference
+// in both branches, so a ~132ms+ model run never stalls capture/streaming.
+bool FaceDetect::run_inference_(std::shared_ptr<camera::CameraImage> image) {
   auto esp_image = std::static_pointer_cast<esp32_camera::ESP32CameraImage>(image);
   if (esp_image == nullptr) {
     return false;
@@ -122,11 +128,17 @@ bool FaceDetect::run_inference_(const std::shared_ptr<camera::CameraImage> &imag
     return false;
   }
   if (fb->format == PIXFORMAT_RGB565) {
-    // Zero-copy fast path. The sensor/driver emits big-endian RGB565
-    // (MSB first, per esp32-camera img_converters docs); tagging it LE
-    // byte-swaps the input and the model silently finds nothing.
-    dl::image::img_t img{fb->buf, static_cast<uint16_t>(fb->width),
+    // Single PSRAM copy (BE order: sensor/driver emits MSB first; LE
+    // byte-swaps the input and the model silently finds nothing), then the
+    // driver fb is released before inference.
+    const size_t need = static_cast<size_t>(fb->width) * fb->height * 2;
+    if (!this->ensure_conv_buf_(need)) {
+      return false;
+    }
+    memcpy(this->conv_buf_, fb->buf, need);
+    dl::image::img_t img{this->conv_buf_, static_cast<uint16_t>(fb->width),
                          static_cast<uint16_t>(fb->height), dl::image::DL_IMAGE_PIX_TYPE_RGB565BE};
+    image.reset();  // return fb to driver before the slow model runs
     return this->detect_and_publish_(img);
   }
   // Generic fallback: JPEG (format 4) and other non-RGB565 captures are
@@ -151,6 +163,7 @@ bool FaceDetect::run_inference_(const std::shared_ptr<camera::CameraImage> &imag
   }
   dl::image::img_t img{this->conv_buf_, static_cast<uint16_t>(fb->width),
                        static_cast<uint16_t>(fb->height), dl::image::DL_IMAGE_PIX_TYPE_RGB888};
+  image.reset();  // return fb to driver before the slow model runs
   const bool ok = this->detect_and_publish_(img);
   ESP_LOGV(TAG, "Converted %dx%d fmt %d in %" PRIu32 "ms", fb->width, fb->height, fb->format,
            millis() - t0);

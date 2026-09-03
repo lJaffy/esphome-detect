@@ -62,7 +62,8 @@ class FaceDetect : public Component, public camera::CameraListener {
   }
 
  protected:
-  bool run_inference_(const std::shared_ptr<camera::CameraImage> &image);
+  // Takes ownership of the frame; releases the driver fb before inference.
+  bool run_inference_(std::shared_ptr<camera::CameraImage> image);
   bool detect_and_publish_(dl::image::img_t &img);
   // No-throw PSRAM buffer reused across frames; avoids per-frame DRAM
   // allocation (std::vector throws -> IDF abort, as seen at 800x600).
