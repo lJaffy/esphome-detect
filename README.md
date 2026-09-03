@@ -2,13 +2,8 @@
 
 A custom ESPHome component that runs human face detection entirely on-device
 on an ESP32-S3, bridging `esp32_camera` frames into Espressif's
-`human_face_detect` models (esp-who family, via `esp-dl`). No cloud, no
-external server: presence, bounding box, score and count are native
+`human_face_detect` models (esp-who family, via `esp-dl`). Presence, bounding box, score and count are native
 Home Assistant entities.
-
-The component lives at `esphome/components/face_detect/`. Copy that
-directory next to your YAML and reference it via `external_components`
-(local path) or from GitHub.
 
 ## Requirements
 
@@ -20,13 +15,31 @@ directory next to your YAML and reference it via `external_components`
   `espressif/esp-dl:3.3.8` and `espressif/human_face_detect:0.5.0` as IDF
   managed components.
 
+## Installation
+
+```yaml
+external_components:
+  - source: github://ljaffy/esphome-detect@main
+    components: [face_detect]
+    refresh: 0h
+```
+
 ## Detection models (`model:` option, default `msrmnp`)
 
 | model | accuracy (mAP50-95) | S3 latency | suggested sensor | suggested `throttle` |
 |---|---|---|---|---|
-| `msrmnp` | 0.37 | ~33ms | 160X120 | 500ms |
-| `espdet_224` | 0.50 | ~132ms | 320X240 | 500ms |
-| `espdet_416` | 0.60 | ~437ms | 640X480 | 1000ms+ |
+| `msrmnp` | 0.367 | ~33ms | 160X120 | 500ms |
+| `espdet_224` | 0.504 | ~132ms | 320X240 | 500ms |
+| `espdet_416` | 0.598 | ~437ms | 640X480 | 1000ms+ |
+
+Latencies are the `model(ms)` column for ESP32-S3 from the upstream model
+table, measured at the model's native input size — see the Model Latency
+table in
+[`models/human_face_detect/README.md`](https://github.com/espressif/esp-dl/blob/master/models/human_face_detect/README.md)
+(same table is published on the
+[`espressif/human_face_detect` registry page](https://components.espressif.com/components/espressif/human_face_detect)).
+`msrmnp` is two-stage (`msr_s8_v1_s3` ~33.1ms plus `mnp_s8_v1_s3` ~5.8ms per
+candidate); totals above exclude preprocess/postprocess.
 
 Changing `model:` writes new `sdkconfig` Kconfig choices — run
 `esphome clean <yaml>` before recompiling. The active model is published
@@ -48,16 +61,21 @@ fired only for above-threshold detections.
 
 ## Sample configuration
 
+Camera pins below are for the Seeed Studio XIAO ESP32S3 Sense module.
+
 ```yaml
 external_components:
-  - source:
-      type: local
-      path: face_detect_parent_dir  # directory containing face_detect/
+  - source: github://ljaffy/esphome-detect@main
+    components: [face_detect]
+    refresh: 0h
 
 esp32:
   board: esp32-s3-devkitc-1
   framework:
     type: esp-idf
+  # Uncomment if the build host runs out of RAM compiling esp-dl
+  #sdkconfig_options:
+  #  CONFIG_COMPILER_OPTIMIZATION_SIZE: y
 
 psram:
 
@@ -74,8 +92,9 @@ esp32_camera:
     sda: 40
     scl: 39
   resolution: 320X240
-  pixel_format: RGB565
-  # max_framerate: 5fps  # uncomment + lower if HA logs API 'Buffer full, ping queued'
+  pixel_format: JPEG  # keep JPEG: RGB565 caused buffer issues
+  jpeg_quality: 10
+  idle_framerate: 1fps  # 1fps detection when the camera is not streaming
   frame_buffer_count: 2
   frame_buffer_location: PSRAM
 
@@ -120,32 +139,17 @@ text_sensor:
       name: Detection model
 ```
 
-A fully commented version of the same config is kept at
-`esphome/components/face_detect/sample.yaml`.
-
 ## Notes and gotchas
 
-- **Pixel formats:** `RGB565` and `JPEG` both work. RGB565 takes one PSRAM
-  copy; JPEG is auto-converted via `fmt2rgb888`. Prefer JPEG when Home
-  Assistant streams the camera (5-10x smaller payloads). Note: with
-  `pixel_format: RGB565` and default `jpeg_quality: 0`, ESPHome serves raw
-  RGB565 that HA cannot display — set `jpeg_quality: 10` for a viewable
-  stream (see `esphome-issue-rgb565-stream.md`).
+- **Pixel format:** keep `pixel_format: JPEG`. `RGB565` caused buffer
+  issues; JPEG is auto-converted via `fmt2rgb888` for detection and gives
+  5-10x smaller payloads when Home Assistant streams the camera.
 - **Streaming load:** if HA logs `Buffer full, ping queued`, lower
-  `max_framerate`/`idle_framerate`, raise `throttle`, or switch to JPEG.
+  `max_framerate`/`idle_framerate`, raise `throttle`, or lower `jpeg_quality`
+  / resolution.
 - **Build host RAM:** compiling `esp-dl` needs well over 1GB per file at
   `-O3`; on small builders set `CONFIG_COMPILER_OPTIMIZATION_SIZE: y`
-  (see `sample.yaml`) or add swap.
+  (see the commented `sdkconfig_options` in the sample config above) or add
+  swap.
 - **After changing `model:` or IDF deps:** `esphome clean` before
   recompiling.
-
-## Repository layout
-
-- `esphome/components/face_detect/` — the component (`__init__.py`,
-  `face_detect.{h,cpp}`, `binary_sensor.py`, `sensor.py`,
-  `text_sensor.py`, `sample.yaml`, `README.md` with full details).
-- `ROADMAP.md` — future work (e.g. ESP32-P4 support).
-- `esphome-issue-rgb565-stream.md` — upstream ESPHome bug-report draft.
-- `face_detect_plan.md` — original design notes.
-- `scratch/` — local reference checkouts (ESPHome, esp-who), not part of
-  the component.
