@@ -7,7 +7,7 @@
 #if __has_include("human_face_detect.hpp")
 #include "human_face_detect.hpp"
 #include "dl_image.hpp"
-static constexpr uint8_t FACE_DETECT_HAS_MODEL = 1
+static constexpr uint8_t FACE_DETECT_HAS_MODEL = 1;
 #endif
 
 namespace esphome::face_detect {

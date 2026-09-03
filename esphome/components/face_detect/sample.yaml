@@ -11,6 +11,12 @@ esp32:
   board: esp32-s3-devkitc-1
   framework:
     type: esp-idf
+    # If the build host is short on RAM, the compiler can be OOM-killed
+    # ("fatal error: Killed signal terminated program as") on heavy esp-dl
+    # translation units. Building everything at -Os instead of -O3 cuts
+    # compiler memory use several-fold. Uncomment if you hit that failure.
+    # sdkconfig_options:
+    #   CONFIG_COMPILER_OPTIMIZATION_SIZE: y
 
 psram:
 
